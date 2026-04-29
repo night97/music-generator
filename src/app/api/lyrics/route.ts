@@ -12,19 +12,29 @@ interface MiniMaxResponse {
   };
 }
 
+function buildConstrainedLyricsPrompt(basePrompt: string): string {
+  return [
+    "请基于下面描述创作完整中文歌词，要求风格一致、语义连贯。",
+    "约束：禁止出现与描述冲突的时代/场景/乐器元素（除非描述明确要求）。",
+    "原始描述：",
+    basePrompt,
+  ].join("\n");
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { mode, prompt, lyrics, title } = body;
+    const normalizedMode = mode === "generate" ? "write_full_song" : mode;
 
-    if (!mode) {
+    if (!normalizedMode) {
       return NextResponse.json(
         { error: "缺少必需参数 mode" },
         { status: 400 }
       );
     }
 
-    if (mode === "edit" && !lyrics) {
+    if (normalizedMode === "edit" && !lyrics) {
       return NextResponse.json(
         { error: "edit 模式需要提供现有歌词" },
         { status: 400 }
@@ -40,11 +50,11 @@ export async function POST(request: NextRequest) {
     }
 
     const requestBody: Record<string, unknown> = {
-      mode,
+      mode: normalizedMode,
     };
 
     if (prompt) {
-      requestBody.prompt = prompt;
+      requestBody.prompt = normalizedMode === "write_full_song" ? buildConstrainedLyricsPrompt(prompt) : prompt;
     }
 
     if (lyrics) {

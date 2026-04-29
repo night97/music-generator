@@ -1,9 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import MusicForm, { MusicGenerationParams } from "@/components/MusicForm";
 import AudioPlayer from "@/components/AudioPlayer";
 import MusicChat from "@/components/MusicChat";
+import QuickGenerate from "@/components/QuickGenerate";
+import GachaMode from "@/components/GachaMode";
+import QualityMode from "@/components/QualityMode";
 
 export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
@@ -13,14 +16,50 @@ export default function Home() {
     format: string;
     outputFormat?: "url" | "hex";
   } | null>(null);
+  const [currentLyrics, setCurrentLyrics] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [pollingTaskId, setPollingTaskId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
-  const [mode, setMode] = useState<"form" | "chat">("form");
+  const [mode, setMode] = useState<"quick" | "form" | "chat" | "gacha" | "quality">("quick");
   const [chatPrompt, setChatPrompt] = useState("");
 
+  // 从 localStorage 恢复状态
+  useEffect(() => {
+    const savedMode = localStorage.getItem("home_mode");
+    if (savedMode) setMode(savedMode as any);
+
+    const savedAudio = localStorage.getItem("home_generated_audio");
+    if (savedAudio) {
+      try {
+        setGeneratedAudio(JSON.parse(savedAudio));
+      } catch (e) {
+        console.error("恢复音频信息失败:", e);
+      }
+    }
+
+    const savedLyrics = localStorage.getItem("home_current_lyrics");
+    if (savedLyrics) setCurrentLyrics(savedLyrics);
+  }, []);
+
+  // 状态变化时保存到 localStorage
+  useEffect(() => {
+    localStorage.setItem("home_mode", mode);
+  }, [mode]);
+
+  useEffect(() => {
+    if (generatedAudio) {
+      localStorage.setItem("home_generated_audio", JSON.stringify(generatedAudio));
+    }
+  }, [generatedAudio]);
+
+  useEffect(() => {
+    localStorage.setItem("home_current_lyrics", currentLyrics);
+  }, [currentLyrics]);
+
   const handleGenerate = async (params: MusicGenerationParams) => {
+    // 保存歌词到 state
+    setCurrentLyrics(params.isInstrumental ? "" : (params.lyrics || ""));
     setIsGenerating(true);
     setError(null);
     setGeneratedAudio(null);
@@ -48,8 +87,8 @@ export default function Home() {
       setPollingTaskId(taskId);
       setTaskStatus("pending");
 
-      // 开始轮询
-      await pollTaskStatus(taskId, params.format);
+      // 开始轮询（使用 params.lyrics 作为初始歌词）
+      await pollTaskStatus(taskId, params.format, params.lyrics);
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成失败");
       setIsGenerating(false);
@@ -57,7 +96,7 @@ export default function Home() {
   };
 
   // 轮询任务状态
-  const pollTaskStatus = async (taskId: string, format: string): Promise<void> => {
+  const pollTaskStatus = async (taskId: string, format: string, existingLyrics?: string): Promise<void> => {
     const maxAttempts = 60; // 10分钟，每10秒一次
     const pollInterval = 10000; // 10秒
 
@@ -75,7 +114,10 @@ export default function Home() {
         setProgress((attempt / maxAttempts) * 100);
 
         if (task.status === "completed") {
-          // 任务完成
+          // 任务完成：从任务中获取歌词（优先使用 API 返回的）
+          const finalLyrics = task.lyrics || existingLyrics || "";
+          setCurrentLyrics(finalLyrics);
+
           setGeneratedAudio({
             audioPath: task.audioFile,
             audioUrl: task.audioUrlResult,
@@ -144,6 +186,19 @@ export default function Home() {
         <div className="flex justify-center mb-8">
           <div className="inline-flex bg-gray-100 rounded-xl p-1">
             <button
+              onClick={() => setMode("quick")}
+              className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                mode === "quick"
+                  ? "bg-white text-primary-600 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              一键生成
+            </button>
+            <button
               onClick={() => setMode("form")}
               className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
                 mode === "form"
@@ -154,7 +209,7 @@ export default function Home() {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
               </svg>
-              直接填写
+              详细表单
             </button>
             <button
               onClick={() => setMode("chat")}
@@ -167,13 +222,158 @@ export default function Home() {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
-              AI 对话助手
+              AI 对话
+            </button>
+            <button
+              onClick={() => setMode("gacha")}
+              className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                mode === "gacha"
+                  ? "bg-white text-primary-600 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              🎰 抽卡
+            </button>
+            <button
+              onClick={() => setMode("quality")}
+              className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                mode === "quality"
+                  ? "bg-white text-primary-600 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              🎯 质量模式
             </button>
           </div>
         </div>
 
         {/* 主内容区 */}
-        {mode === "chat" ? (
+        {mode === "quick" ? (
+          /* 一键生成模式 */
+          <div className="grid xl:grid-cols-5 gap-8 items-start">
+            {/* 左：一键生成 */}
+            <div className="xl:col-span-3 xl:sticky xl:top-4">
+              <QuickGenerate
+                onGenerate={handleGenerate}
+                isGenerating={isGenerating}
+              />
+            </div>
+
+            {/* 右：播放器 → 需要灵感 → 使用提示 */}
+            <div className="xl:col-span-2 space-y-6">
+              {/* 生成状态 */}
+              {isGenerating && pollingTaskId && (
+                <div className="bg-gradient-to-br from-blue-50 to-purple-50 rounded-xl p-6 border border-blue-100">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center shrink-0">
+                      <svg className="w-5 h-5 text-white animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-gray-900">正在生成音乐</h3>
+                      <p className="text-sm text-gray-600">AI 正在为你创作，请稍候...</p>
+                    </div>
+                  </div>
+                  <div className="mb-3">
+                    <div className="flex justify-between text-xs text-gray-600 mb-1">
+                      <span>处理中</span>
+                      <span>{Math.round(progress)}%</span>
+                    </div>
+                    <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-blue-500 to-purple-500 transition-all duration-1000"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-500 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-2 h-2 rounded-full ${
+                        taskStatus === "pending" ? "bg-yellow-400" :
+                        taskStatus === "processing" ? "bg-blue-400" :
+                        taskStatus === "completed" ? "bg-green-400" :
+                        "bg-gray-400"
+                      }`} />
+                      <span>
+                        {taskStatus === "pending" ? "任务已创建，排队中..." :
+                         taskStatus === "processing" ? "正在生成音乐..." :
+                         taskStatus === "completed" ? "生成完成！" :
+                         "等待处理..."}
+                      </span>
+                    </div>
+                    <div>任务 ID: {pollingTaskId}</div>
+                    <div>预计时间: 1-3 分钟</div>
+                  </div>
+                </div>
+              )}
+
+              {/* 播放器 */}
+              <div className="bg-white rounded-2xl shadow-xl p-6 md:p-8">
+                <h2 className="text-xl font-semibold text-gray-900 mb-6 flex items-center gap-2">
+                  <svg className="w-5 h-5 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                  </svg>
+                  生成的音乐
+                </h2>
+
+                {generatedAudio ? (
+                  <AudioPlayer
+                    audioPath={generatedAudio.audioPath}
+                    audioUrl={generatedAudio.audioUrl}
+                    format={generatedAudio.format}
+                    outputFormat={generatedAudio.outputFormat}
+                    lyrics={currentLyrics}
+                  />
+                ) : (
+                  <div className="text-center py-12 text-gray-400">
+                    <svg className="w-12 h-12 mx-auto mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                    </svg>
+                    <p className="text-sm">点击一键生成开始创作</p>
+                    <p className="text-xs mt-1 text-gray-400">音乐将在此处显示</p>
+                  </div>
+                )}
+              </div>
+
+              {/* 需要灵感 */}
+              <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-2xl p-6 border border-purple-100 flex flex-col items-center justify-center text-center">
+                <div className="w-14 h-14 bg-white rounded-2xl shadow-sm flex items-center justify-center mb-4">
+                  <svg className="w-7 h-7 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-semibold text-purple-900 mb-2">需要灵感？</h3>
+                <p className="text-sm text-purple-600 mb-4">切换到 AI 对话，帮你细化需求</p>
+                <button
+                  onClick={() => setMode("chat")}
+                  className="w-full px-5 py-3 bg-white border border-purple-200 text-purple-600 rounded-xl text-sm font-medium hover:bg-purple-50 transition-colors flex items-center justify-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                  开启 AI 对话
+                </button>
+              </div>
+
+              {/* 使用提示 */}
+              <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
+                <h3 className="font-medium text-blue-800 mb-2 flex items-center gap-2">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  使用提示
+                </h3>
+                <ul className="text-sm text-blue-700 space-y-1">
+                  <li>• 输入几个关键词即可开始</li>
+                  <li>• 选择风格获得更好效果</li>
+                  <li>• 需要精细控制请用详细表单</li>
+                  <li>• 生成需要 1-3 分钟</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        ) : mode === "chat" ? (
           /* AI 对话模式 */
           <div className="grid xl:grid-cols-2 gap-8 items-start">
             {/* 左侧：对话 */}
@@ -278,6 +478,7 @@ export default function Home() {
                     audioUrl={generatedAudio.audioUrl}
                     format={generatedAudio.format}
                     outputFormat={generatedAudio.outputFormat}
+                    lyrics={currentLyrics}
                   />
                 ) : (
                   <div className="text-center py-12 text-gray-400">
@@ -290,8 +491,16 @@ export default function Home() {
               </div>
             </div>
           </div>
+        ) : mode === "gacha" ? (
+          /* 抽卡模式 */
+          <div className="max-w-4xl mx-auto">
+            <GachaMode />
+          </div>
+        ) : mode === "quality" ? (
+          /* 质量模式 */
+          <QualityMode />
         ) : (
-          /* 直接填写模式 */
+          /* 详细表单模式 */
           <div className="grid xl:grid-cols-5 gap-8 items-start">
             {/* 左：表单 */}
             <div className="xl:col-span-3 xl:sticky xl:top-4">
@@ -384,6 +593,7 @@ export default function Home() {
                     audioUrl={generatedAudio.audioUrl}
                     format={generatedAudio.format}
                     outputFormat={generatedAudio.outputFormat}
+                    lyrics={currentLyrics}
                   />
                 ) : (
                   <div className="text-center py-12 text-gray-400">

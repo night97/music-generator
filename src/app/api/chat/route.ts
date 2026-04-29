@@ -5,7 +5,7 @@ const ANTHROPIC_API_URL = "https://api.minimaxi.com/anthropic/v1/messages";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { messages, systemPrompt } = body;
+    const { messages, systemPrompt, maxTokens } = body;
 
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json(
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
 
     const requestBody = {
       model: "MiniMax-M2.7",
-      max_tokens: 1024,
+      max_tokens: Math.max(256, Math.min(4096, Number(maxTokens) || 1024)),
       system: systemPrompt || "你是一个音乐创作助手。",
       messages: chatMessages,
     };
