@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 
 interface GenerationRecord {
   id: string;
+  taskId: string;
   createdAt: string;
   model: string;
   prompt: string;
@@ -230,6 +231,13 @@ export default function HistoryPage() {
 
                   {/* 操作按钮 */}
                   <div className="flex items-center gap-2 ml-4">
+                    <a
+                      href={`/song/${record.taskId}`}
+                      className="px-3 py-2 text-xs bg-cyan-50 text-cyan-700 rounded-lg hover:bg-cyan-100 transition-colors"
+                      title="查看详情"
+                    >
+                      详情
+                    </a>
                     <audio
                       ref={(el) => { if (el && record.id === playingId) setAudioRef(el); }}
                       onEnded={() => setPlayingId(null)}

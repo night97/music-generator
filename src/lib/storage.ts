@@ -6,6 +6,7 @@ const DATA_DIR = path.join(process.cwd(), "data");
 const AUDIO_DIR = path.join(process.cwd(), "public", "generated");
 const RECORDS_FILE = path.join(DATA_DIR, "records.json");
 const TASKS_FILE = path.join(DATA_DIR, "tasks.json");
+const GACHA_BATCHES_FILE = path.join(DATA_DIR, "gacha_batches.json");
 
 // 确保目录存在
 function ensureDirs() {
@@ -66,6 +67,41 @@ export interface GenerationRecord {
   audioUrlResult?: string;  // API 返回的 URL (url 模式)
   musicDuration?: number;
   musicSize?: number;
+}
+
+export type GachaItemStatus = "pending" | "generating" | "completed" | "failed";
+export type GachaQualityStrictness = "loose" | "standard" | "strict";
+
+export interface GachaBatchItem {
+  promptId: string;
+  prompt: string;
+  originalPrompt?: string;
+  optimizedPrompt?: string;
+  optimizationNotes?: string;
+  theme: string;
+  style: string;
+  taskId?: string;
+  status: GachaItemStatus;
+  audioUrl?: string;
+  audioPath?: string;
+  error?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface GachaBatch {
+  id: string;
+  theme: string;
+  createdAt: string;
+  updatedAt: string;
+  total: number;
+  completed: number;
+  failed: number;
+  status: "pending" | "generating" | "completed" | "stopped";
+  stopRequested?: boolean;
+  timeoutMinutes: number;
+  qualityStrictness: GachaQualityStrictness;
+  items: GachaBatchItem[];
 }
 
 // ===== 任务管理函数 =====
@@ -228,6 +264,33 @@ export function getRecordById(id: string): GenerationRecord | null {
   return records.find((r) => r.id === id) || null;
 }
 
+export function updateTaskLyrics(taskId: string, lyrics: string): MusicTask | null {
+  const tasks = getAllTasks();
+  const index = tasks.findIndex((t) => t.id === taskId);
+  if (index === -1) return null;
+  tasks[index] = {
+    ...tasks[index],
+    lyrics,
+    updatedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(TASKS_FILE, JSON.stringify(tasks, null, 2));
+  return tasks[index];
+}
+
+export function updateRecordLyricsByTaskId(taskId: string, lyrics: string): void {
+  const records = getAllRecords();
+  let changed = false;
+  for (let i = 0; i < records.length; i++) {
+    if (records[i].taskId === taskId) {
+      records[i] = { ...records[i], lyrics };
+      changed = true;
+    }
+  }
+  if (changed) {
+    fs.writeFileSync(RECORDS_FILE, JSON.stringify(records, null, 2));
+  }
+}
+
 // 删除记录（同时删除音频文件）
 export function deleteRecord(id: string): boolean {
   const records = getAllRecords();
@@ -273,4 +336,194 @@ export function saveAudioFile(audioHex: string, format: string): string {
   fs.writeFileSync(filepath, buffer);
 
   return `/generated/${filename}`;
+}
+
+// ===== 抽卡批次函数 =====
+export function getAllGachaBatches(): GachaBatch[] {
+  ensureDirs();
+  if (!fs.existsSync(GACHA_BATCHES_FILE)) {
+    return [];
+  }
+  try {
+    const data = fs.readFileSync(GACHA_BATCHES_FILE, "utf-8");
+    const parsed = JSON.parse(data) as GachaBatch[];
+    // 兼容历史数据：旧批次没有 qualityStrictness 时默认 standard
+    return parsed.map((batch) => ({
+      ...batch,
+      qualityStrictness: batch.qualityStrictness || "standard",
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function saveAllGachaBatches(batches: GachaBatch[]): void {
+  ensureDirs();
+  fs.writeFileSync(GACHA_BATCHES_FILE, JSON.stringify(batches, null, 2));
+}
+
+export function createGachaBatch(
+  theme: string,
+  prompts: { id: string; prompt: string; theme: string; style: string }[],
+  timeoutMinutes = 8,
+  qualityStrictness: GachaQualityStrictness = "standard"
+): GachaBatch {
+  const now = new Date().toISOString();
+  const batch: GachaBatch = {
+    id: `gacha_batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    theme,
+    createdAt: now,
+    updatedAt: now,
+    total: prompts.length,
+    completed: 0,
+    failed: 0,
+    status: "pending",
+    stopRequested: false,
+    timeoutMinutes,
+    qualityStrictness,
+    items: prompts.map((p) => ({
+      promptId: p.id,
+      prompt: p.prompt,
+      theme: p.theme,
+      style: p.style,
+      status: "pending",
+    })),
+  };
+
+  const batches = getAllGachaBatches();
+  batches.unshift(batch);
+  saveAllGachaBatches(batches);
+  return batch;
+}
+
+export function getGachaBatchById(batchId: string): GachaBatch | null {
+  const batches = getAllGachaBatches();
+  return batches.find((b) => b.id === batchId) || null;
+}
+
+export function updateGachaBatchItem(
+  batchId: string,
+  promptId: string,
+  updates: Partial<GachaBatchItem>
+): GachaBatch | null {
+  const batches = getAllGachaBatches();
+  const batchIndex = batches.findIndex((b) => b.id === batchId);
+  if (batchIndex < 0) return null;
+
+  const batch = batches[batchIndex];
+  const itemIndex = batch.items.findIndex((i) => i.promptId === promptId);
+  if (itemIndex < 0) return null;
+
+  batch.items[itemIndex] = {
+    ...batch.items[itemIndex],
+    ...updates,
+  };
+
+  const completed = batch.items.filter((i) => i.status === "completed").length;
+  const failed = batch.items.filter((i) => i.status === "failed").length;
+  const generating = batch.items.some((i) => i.status === "generating");
+  const hasPending = batch.items.some((i) => i.status === "pending");
+
+  batch.completed = completed;
+  batch.failed = failed;
+  if (!hasPending && !generating) {
+    batch.status = "completed";
+  } else if (batch.stopRequested) {
+    batch.status = "stopped";
+  } else if (completed > 0 || failed > 0 || generating) {
+    batch.status = "generating";
+  } else {
+    batch.status = "pending";
+  }
+
+  batch.updatedAt = new Date().toISOString();
+  batches[batchIndex] = batch;
+  saveAllGachaBatches(batches);
+  return batch;
+}
+
+export function updateGachaBatchMeta(
+  batchId: string,
+  updates: Partial<GachaBatch>
+): GachaBatch | null {
+  const batches = getAllGachaBatches();
+  const batchIndex = batches.findIndex((b) => b.id === batchId);
+  if (batchIndex < 0) return null;
+
+  const batch = {
+    ...batches[batchIndex],
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+
+  batches[batchIndex] = batch;
+  saveAllGachaBatches(batches);
+  return batch;
+}
+
+export function rollbackGeneratingItemsToPending(batchId: string): GachaBatch | null {
+  const batches = getAllGachaBatches();
+  const batchIndex = batches.findIndex((b) => b.id === batchId);
+  if (batchIndex < 0) return null;
+
+  const batch = batches[batchIndex];
+  batch.items = batch.items.map((item) => {
+    if (item.status !== "generating") return item;
+    return {
+      ...item,
+      status: "pending",
+      startedAt: undefined,
+      finishedAt: undefined,
+      error: undefined,
+    };
+  });
+
+  const completed = batch.items.filter((i) => i.status === "completed").length;
+  const failed = batch.items.filter((i) => i.status === "failed").length;
+  const hasPending = batch.items.some((i) => i.status === "pending");
+  batch.completed = completed;
+  batch.failed = failed;
+  batch.status = hasPending ? "stopped" : "completed";
+  batch.updatedAt = new Date().toISOString();
+
+  batches[batchIndex] = batch;
+  saveAllGachaBatches(batches);
+  return batch;
+}
+
+export function rollbackFailedItemsToPending(batchId: string): GachaBatch | null {
+  const batches = getAllGachaBatches();
+  const batchIndex = batches.findIndex((b) => b.id === batchId);
+  if (batchIndex < 0) return null;
+
+  const batch = batches[batchIndex];
+  batch.items = batch.items.map((item) => {
+    if (item.status !== "failed") return item;
+    return {
+      ...item,
+      status: "pending",
+      error: undefined,
+      startedAt: undefined,
+      finishedAt: undefined,
+    };
+  });
+
+  const completed = batch.items.filter((i) => i.status === "completed").length;
+  const failed = batch.items.filter((i) => i.status === "failed").length;
+  const generating = batch.items.some((i) => i.status === "generating");
+  const hasPending = batch.items.some((i) => i.status === "pending");
+  batch.completed = completed;
+  batch.failed = failed;
+  if (!hasPending && !generating) {
+    batch.status = "completed";
+  } else if (batch.stopRequested) {
+    batch.status = "stopped";
+  } else {
+    batch.status = "generating";
+  }
+  batch.updatedAt = new Date().toISOString();
+
+  batches[batchIndex] = batch;
+  saveAllGachaBatches(batches);
+  return batch;
 }

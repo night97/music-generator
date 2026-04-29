@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import MusicForm, { MusicGenerationParams } from "@/components/MusicForm";
 import AudioPlayer from "@/components/AudioPlayer";
 import MusicChat from "@/components/MusicChat";
 import QuickGenerate from "@/components/QuickGenerate";
+import GachaMode from "@/components/GachaMode";
+import QualityMode from "@/components/QualityMode";
 
 export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
@@ -14,14 +16,50 @@ export default function Home() {
     format: string;
     outputFormat?: "url" | "hex";
   } | null>(null);
+  const [currentLyrics, setCurrentLyrics] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [pollingTaskId, setPollingTaskId] = useState<string | null>(null);
   const [taskStatus, setTaskStatus] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
-  const [mode, setMode] = useState<"quick" | "form" | "chat">("quick");
+  const [mode, setMode] = useState<"quick" | "form" | "chat" | "gacha" | "quality">("quick");
   const [chatPrompt, setChatPrompt] = useState("");
 
+  // 从 localStorage 恢复状态
+  useEffect(() => {
+    const savedMode = localStorage.getItem("home_mode");
+    if (savedMode) setMode(savedMode as any);
+
+    const savedAudio = localStorage.getItem("home_generated_audio");
+    if (savedAudio) {
+      try {
+        setGeneratedAudio(JSON.parse(savedAudio));
+      } catch (e) {
+        console.error("恢复音频信息失败:", e);
+      }
+    }
+
+    const savedLyrics = localStorage.getItem("home_current_lyrics");
+    if (savedLyrics) setCurrentLyrics(savedLyrics);
+  }, []);
+
+  // 状态变化时保存到 localStorage
+  useEffect(() => {
+    localStorage.setItem("home_mode", mode);
+  }, [mode]);
+
+  useEffect(() => {
+    if (generatedAudio) {
+      localStorage.setItem("home_generated_audio", JSON.stringify(generatedAudio));
+    }
+  }, [generatedAudio]);
+
+  useEffect(() => {
+    localStorage.setItem("home_current_lyrics", currentLyrics);
+  }, [currentLyrics]);
+
   const handleGenerate = async (params: MusicGenerationParams) => {
+    // 保存歌词到 state
+    setCurrentLyrics(params.isInstrumental ? "" : (params.lyrics || ""));
     setIsGenerating(true);
     setError(null);
     setGeneratedAudio(null);
@@ -49,8 +87,8 @@ export default function Home() {
       setPollingTaskId(taskId);
       setTaskStatus("pending");
 
-      // 开始轮询
-      await pollTaskStatus(taskId, params.format);
+      // 开始轮询（使用 params.lyrics 作为初始歌词）
+      await pollTaskStatus(taskId, params.format, params.lyrics);
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成失败");
       setIsGenerating(false);
@@ -58,7 +96,7 @@ export default function Home() {
   };
 
   // 轮询任务状态
-  const pollTaskStatus = async (taskId: string, format: string): Promise<void> => {
+  const pollTaskStatus = async (taskId: string, format: string, existingLyrics?: string): Promise<void> => {
     const maxAttempts = 60; // 10分钟，每10秒一次
     const pollInterval = 10000; // 10秒
 
@@ -76,7 +114,10 @@ export default function Home() {
         setProgress((attempt / maxAttempts) * 100);
 
         if (task.status === "completed") {
-          // 任务完成
+          // 任务完成：从任务中获取歌词（优先使用 API 返回的）
+          const finalLyrics = task.lyrics || existingLyrics || "";
+          setCurrentLyrics(finalLyrics);
+
           setGeneratedAudio({
             audioPath: task.audioFile,
             audioUrl: task.audioUrlResult,
@@ -183,6 +224,26 @@ export default function Home() {
               </svg>
               AI 对话
             </button>
+            <button
+              onClick={() => setMode("gacha")}
+              className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                mode === "gacha"
+                  ? "bg-white text-primary-600 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              🎰 抽卡
+            </button>
+            <button
+              onClick={() => setMode("quality")}
+              className={`px-6 py-2.5 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                mode === "quality"
+                  ? "bg-white text-primary-600 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              🎯 质量模式
+            </button>
           </div>
         </div>
 
@@ -262,6 +323,7 @@ export default function Home() {
                     audioUrl={generatedAudio.audioUrl}
                     format={generatedAudio.format}
                     outputFormat={generatedAudio.outputFormat}
+                    lyrics={currentLyrics}
                   />
                 ) : (
                   <div className="text-center py-12 text-gray-400">
@@ -416,6 +478,7 @@ export default function Home() {
                     audioUrl={generatedAudio.audioUrl}
                     format={generatedAudio.format}
                     outputFormat={generatedAudio.outputFormat}
+                    lyrics={currentLyrics}
                   />
                 ) : (
                   <div className="text-center py-12 text-gray-400">
@@ -428,8 +491,16 @@ export default function Home() {
               </div>
             </div>
           </div>
+        ) : mode === "gacha" ? (
+          /* 抽卡模式 */
+          <div className="max-w-4xl mx-auto">
+            <GachaMode />
+          </div>
+        ) : mode === "quality" ? (
+          /* 质量模式 */
+          <QualityMode />
         ) : (
-          /* 直接填写模式 */
+          /* 详细表单模式 */
           <div className="grid xl:grid-cols-5 gap-8 items-start">
             {/* 左：表单 */}
             <div className="xl:col-span-3 xl:sticky xl:top-4">
@@ -522,6 +593,7 @@ export default function Home() {
                     audioUrl={generatedAudio.audioUrl}
                     format={generatedAudio.format}
                     outputFormat={generatedAudio.outputFormat}
+                    lyrics={currentLyrics}
                   />
                 ) : (
                   <div className="text-center py-12 text-gray-400">

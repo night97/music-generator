@@ -42,6 +42,25 @@ export default function MusicChat({ onApplyPrompt, currentPrompt }: MusicChatPro
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // 从 localStorage 恢复聊天记录
+  useEffect(() => {
+    const savedMessages = localStorage.getItem("music_chat_history");
+    if (savedMessages) {
+      try {
+        setMessages(JSON.parse(savedMessages));
+      } catch (e) {
+        console.error("恢复聊天记录失败:", e);
+      }
+    }
+  }, []);
+
+  // 消息变化时保存到 localStorage
+  useEffect(() => {
+    if (messages.length > 1) { // 初始消息不重复保存
+      localStorage.setItem("music_chat_history", JSON.stringify(messages));
+    }
+  }, [messages]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
